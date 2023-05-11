@@ -1,8 +1,7 @@
-﻿using System.Collections;
+using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
 
-namespace GK {
 	public class BlueNoise {
 
 		System.Random generator;
@@ -200,4 +199,3 @@ namespace GK {
 			return gridY * gridDims + gridX;
 		}
 	}
-}

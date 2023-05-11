@@ -1,9 +1,11 @@
-﻿Shader "Custom/TonalArtMapShader" {
+// Upgrade NOTE: commented out 'float3 _WorldSpaceCameraPos', a built-in variable
+
+Shader "Custom/TonalArtMapShader" {
 	Properties {
 		_MainTex ("Main texture", 2D) = "white" {}
 		_TonalArtMap ("Tonal Art Map", 2DArray) = "" {}
 		_ColorTint ("Tint", Color) = (1.0, 0.6, 0.6, 1.0)
-		_Test ("Test", Range(0, 10)) = 0
+		ToneLevels ("Tone Levels", Int) = 8
 	}
 
 	SubShader {
@@ -16,9 +18,12 @@
 		struct Input {
 			float2 uv_MainTex;
 			float2 uv_TonalArtMap;
+			float3 worldPos;
 		};
 
-		float _Test;
+		// float3 _WorldSpaceCameraPos;
+
+		int ToneLevels;
 		fixed4 _ColorTint;
 		sampler2D _MainTex;
 		//float4 _MainTex_ST;
@@ -37,16 +42,20 @@
 
 		void apply_tam(Input IN, SurfaceOutput o, inout fixed4 color)
 		{
-			//fixed l = pow(luma(color), 2.2);
 			fixed l = luma(color);
-			fixed texI = (1 - l) * 8.0;
+			fixed texI = (1 - l) * ToneLevels;
+			color = texI;
+			// fixed distFrac = distance(_WorldSpaceCameraPos, IN.worldPos) / 100;
+			// fixed mipLevel = (int)lerp(0, 7, distFrac);
 
-			fixed4 col1 = UNITY_SAMPLE_TEX2DARRAY(_TonalArtMap, float3(IN.uv_TonalArtMap, floor(texI)));
-			fixed4 col2 = UNITY_SAMPLE_TEX2DARRAY(_TonalArtMap, float3(IN.uv_TonalArtMap, ceil(texI)));
+
+			fixed4 col1 = UNITY_SAMPLE_TEX2DARRAY_LOD(_TonalArtMap, float3(IN.uv_TonalArtMap, floor(texI)), 1);
+			fixed4 col2 = UNITY_SAMPLE_TEX2DARRAY_LOD(_TonalArtMap, float3(IN.uv_TonalArtMap, ceil(texI)), 1);
+
+			// // fixed4 col1 = UNITY_SAMPLE_TEX2DARRAY(_TonalArtMap, float3(IN.uv_TonalArtMap, floor(texI)));
+			// // fixed4 col2 = UNITY_SAMPLE_TEX2DARRAY(_TonalArtMap, float3(IN.uv_TonalArtMap, ceil(texI)));
 
 			color = lerp(col1, col2, texI - floor(texI));
-			//color = col1;
-			//color = pow(l, 1.0/2.2);
 		}
 
 		void surf (Input IN, inout SurfaceOutput o) {
