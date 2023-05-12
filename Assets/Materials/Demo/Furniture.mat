@@ -66,7 +66,7 @@ Material:
         m_Scale: {x: 1, y: 1}
         m_Offset: {x: 0, y: 0}
     - _TonalArtMap:
-        m_Texture: {fileID: 18700000, guid: 94d3dfc57fdafc843838c7986da91297, type: 2}
+        m_Texture: {fileID: 18700000, guid: 40528b804e635634b897c968705bac12, type: 2}
         m_Scale: {x: 4, y: 4}
         m_Offset: {x: 0, y: 0}
     - unity_Lightmaps:
@@ -114,7 +114,7 @@ Material:
     - _SpecularHighlights: 1
     - _SrcBlend: 1
     - _Surface: 0
-    - _ToneLevels: 255
+    - _ToneLevels: 10
     - _WorkflowMode: 1
     - _ZWrite: 1
     m_Colors:

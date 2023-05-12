@@ -1,4 +1,3 @@
-// https://stackoverflow.com/questions/40292021/need-average-and-max-value-of-a-texture-in-shader
 Shader "Custom/BlendTransparent"
 {
     Properties
@@ -16,12 +15,6 @@ Shader "Custom/BlendTransparent"
             #pragma fragment frag
             #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
             #include "Utils.hlsl"
-            
-            // compile shader into multiple variants, with and without shadows
-            // (we don't care about any lightmaps yet, so skip these variants)
-            // #pragma multi_compile_fwdbase nolightmap nodirlightmap nodynlightmap novertexlight
-
-            // shadow helper functions and macros
 
             struct appdata
             {

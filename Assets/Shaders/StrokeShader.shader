@@ -1,4 +1,4 @@
-Shader "Custom/GeneratorStrokeOverwriteShader"
+Shader "Custom/StrokeShader"
 {
     Properties
     {
@@ -24,7 +24,6 @@ Shader "Custom/GeneratorStrokeOverwriteShader"
         Pass
         {
             Blend SrcAlpha OneMinusSrcAlpha
-            // ZWrite Off
 
             HLSLPROGRAM
             #pragma vertex vert
@@ -66,36 +65,23 @@ Shader "Custom/GeneratorStrokeOverwriteShader"
                 const float Pi = 3.14159265f;
                 const float Deg2Rad = (Pi * 2.0) / 360.0;
 
+                // ends up with overlap in center. Not sure if its the blue noise class or my transforms.
                 float2 offset = float2( _StrokeOffsetX, _StrokeOffsetY );
                 float2 scale = float2( rcp( _StrokeScaleX ), rcp( _StrokeScaleY ) );
                 float rotation = _StrokeRotation;
-
-                
-                // if ( uv.x > 1 ) uv.x -= 1;
-                // if ( uv.y > 1 ) uv.y -= 1;
-                // if ( uv.x < 0 ) uv.x += 1;
-                // if ( uv.y < 0 ) uv.y += 1;
                 
                 float sinVal = sin (radians( rotation ) );
                 float cosVal = cos ( radians( rotation ) );
                 float2x2 rotationMatrix = float2x2( cosVal, -sinVal, sinVal, cosVal);
-                // rotationMatrix = ( ( rotationMatrix * .5 ) + .5 ) * 2 - 1;
                 float3x3 scaleMatrix = float3x3( 
                     scale.x, 0, 0,
                     0, scale.y, 0,
                     0, 0, 1
                  );
-                // uv = uv - .5;
 
-                uv = frac( uv + offset) - .5;
-                
+                uv = frac( uv + offset ) - .5;                
                 uv = mul( rotationMatrix, ( uv ) );
-                uv = mul( scaleMatrix, float3( uv, 1 ) ).xy;
-
-                // uv = uv + offset;
-
-                // uv = ( uv - 0.5 ) * scale + 0.5;
-                // uv *= ( scale * ( uv - .5 ) ) + .5;
+                uv = mul( scaleMatrix, float3( uv, 1 ) ).xy + .5;
 
                 return uv;
             }
@@ -118,7 +104,6 @@ Shader "Custom/GeneratorStrokeOverwriteShader"
                 float brightnessDirection = lerp( -1, 1, _Invert );
                 stroke_col = lerp( stroke_col, float4( _Color.xyz, stroke_col.w ), _OverwriteColor );
                 stroke_col *= 1 + brightnessDirection * _BrightnessRatio;
-                // stroke_col = lighten_color( stroke_col );
                 float4 main_col = SAMPLE_TEXTURE2D( _MainTex, sampler_MainTex, input.uv);
                 float4 col = combine_colors( stroke_col, main_col );
 

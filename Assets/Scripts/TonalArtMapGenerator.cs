@@ -1,5 +1,5 @@
 using UnityEngine;
-using System.Collections;
+using System;
 using System.Collections.Generic;
 
 namespace Scripts{
@@ -8,7 +8,7 @@ public class TonalArtMapGenerator {
 		struct Stroke {
 			public Vector2 Position;
 			public float Length;
-			public float Rotation;
+			public float Offset;
 			public bool Horizontal;
 
 			public override string ToString() {
@@ -21,24 +21,31 @@ public class TonalArtMapGenerator {
 		}
 
 		int potSize;
-		int size;
+        private Material reducerMat;
+        private Material blendMat;
+        int size;
 		Texture strokeTex;
-		int toneLevels;
+        private readonly Color sourceColor;
+        private float sourceColorValue;
+        int toneLevels;
 		int mipLevels;
 		float minTone;
 		float maxTone;
 		float height;
 		float minLength;
 		float maxLength;
-		bool rotateStrokes;
-        private readonly float rotation;
-        private readonly bool overwriteColor;
-        System.Random generator;
+		float maxBrightnessReduction = 0.2f;
+		System.Random generator;
 		BlueNoise noiseGen;
-		Shader blitShader;
+        private bool rotateDark;
+        private readonly float rotation;
+        private readonly float rotationOffset;
+        Shader blitShader;
 		Material bltMat;
 		Texture2D toneCalculator;
 		Texture2D[] toneCalculators;
+
+		Texture2D[,] MainTextures;
 
 		public RenderTexture[,] Textures { get; private set; }
 		public GameObject[,] Planes { get; private set; }
@@ -49,37 +56,43 @@ public class TonalArtMapGenerator {
 		public TonalArtMapGenerator(
 				int potSize,
 				Texture strokeTex,
-				Shader blitShader,
+				Color sourceColor,
 				int toneLevels,
 				int mipLevels,
 				float minTone,
 				float maxTone,
 				float height,
+				float maxBrightnessReduction,
 				System.Random generator,
 				float minLength = 0.1f,
 				float maxLength = 0.4f,
-				bool rotateStrokes = true,
+				bool rotateDark = true,
 				float rotation = 0,
-				bool overwriteColor = false)
+				float rotationOffset = 3)
 		{
 			this.potSize = potSize;
+			this.reducerMat = new Material(Shader.Find("Custom/Reducer"));
+			this.blendMat = new Material(Shader.Find("Custom/BlendTransparent"));
 			this.size = 1 << potSize;
 			this.strokeTex = strokeTex;
-			this.toneLevels = toneLevels;
+            this.sourceColor = sourceColor;
+            this.sourceColorValue = ColorValue(sourceColor);
+            this.toneLevels = toneLevels;
 			this.mipLevels = mipLevels;
 			this.minTone = minTone;
 			this.maxTone = maxTone;
 			this.generator = generator;
             this.minLength = minLength;
             this.maxLength = maxLength;
-            this.rotateStrokes = rotateStrokes;
-            this.rotation = rotation;
-            this.overwriteColor = overwriteColor;
             this.noiseGen = new BlueNoise(generator);
-			this.blitShader = blitShader;
+			this.rotateDark = rotateDark;
+            this.rotation = rotation;
+            this.rotationOffset = rotationOffset;
+            this.blitShader = Shader.Find("Custom/StrokeShader");
 			this.height = height;
-
-			Textures = new RenderTexture[toneLevels, mipLevels];
+            this.maxBrightnessReduction = maxBrightnessReduction;
+            Textures = new RenderTexture[toneLevels, mipLevels];
+			MainTextures = new Texture2D[toneLevels, mipLevels];
 			Planes = new GameObject[toneLevels, mipLevels];
 
 			toneCalculator = new Texture2D(1, 1, TextureFormat.ARGB32, false);
@@ -91,7 +104,6 @@ public class TonalArtMapGenerator {
 			}
 
 			var oldRt = RenderTexture.active;
-			
 			for (int tone = 0; tone < toneLevels; tone++) {
 				for (int mip = 0; mip < mipLevels; mip++) {
 					var mipSize = size >> mip;
@@ -99,24 +111,34 @@ public class TonalArtMapGenerator {
 					Textures[tone, mip] = new RenderTexture(mipSize, mipSize, 0, RenderTextureFormat.ARGB32);
 					Textures[tone, mip].name = string.Format("Tone {0} Mip {1} Size {2}", tone, mip, mipSize);
 					Textures[tone, mip].useMipMap = false;
-
+					
 					RenderTexture.active = Textures[tone, mip];
-					GL.Clear(true, true, Color.white);
+					GL.Clear(true, true, new Color(sourceColor.r, sourceColor.g, sourceColor.b, 0));
+					
+					MainTextures[tone, mip] = new Texture2D(mipSize, mipSize, TextureFormat.ARGB32, false);
+					FlushMainTexture(tone, mip);
 				}
 			}
 
 			RenderTexture.active = oldRt;
 		}
 
+		public List<Texture2D> GetTextures() {
+			var textures = new List<Texture2D>();
+			for(int i = 0; i < this.MainTextures.Length; i++) {
+				textures.Add(this.MainTextures[i, 0]);
+			}
 
+			return textures;
+		}
 
 		public Texture2DArray GetTextureArray() {
-			var array = new Texture2DArray(size, size, toneLevels, TextureFormat.RGB24, mipLevels, true);
+			var array = new Texture2DArray(size, size, toneLevels, TextureFormat.ARGB32, mipLevels, true);
 			var readingTextures = new Texture2D[mipLevels];
 
 			for (int mip = 0; mip < mipLevels; mip++) {
 				var mipSize = size >> mip;
-				readingTextures[mip] = new Texture2D(mipSize, mipSize, TextureFormat.RGB24, false);
+				readingTextures[mip] = new Texture2D(mipSize, mipSize, TextureFormat.ARGB32, false);
 			}
 
 			var oldRt = RenderTexture.active;
@@ -127,9 +149,10 @@ public class TonalArtMapGenerator {
 
 					var mipSize = size >> mip;
 
-					readingTextures[mip].ReadPixels(new Rect(0, 0, mipSize, mipSize), 0, 0, false);
-					var pixels = readingTextures[mip].GetPixels();
+					// readingTextures[mip].ReadPixels(new Rect(0, 0, mipSize, mipSize), 0, 0, false);
+					var pixels = MainTextures[tone, mip].GetPixels();
 					array.SetPixels(pixels, tone, mip);
+					// array.SetPixels(pixels, tone, mip);
 				}
 			}
 
@@ -141,56 +164,6 @@ public class TonalArtMapGenerator {
 			return array;
 		}
 
-		public IEnumerable DrawStrokesEnum() {
-			yield return null;
-			// var toneRange = maxTone - minTone;
-			// var strokeNum = 20;
-			// // var strokes = new List<List<List<Stroke>>>();
-			// var strokes = new Dictionary<(int tone, int mip), List<Stroke>>();
-			
-			// for (int tone = 0; tone < toneLevels; tone++) {
-			// 	// // Debug.Log(tone);
-			// 	var toneValue = minTone + tone * (toneRange / (toneLevels - 1));
-
-			// 	for (int mip = mipLevels - 1; mip >= 0; mip--) {
-			// 		var strokeList = new List<Stroke>();
-			// 		strokes[(tone, mip)] = strokeList;
-			// 		for (var strokeN = 0; strokeN < strokeNum; strokeN ++) {
-			// 			strokeList.Add(GenerateStroke(toneValue));
-			// 		}
-			// 	}
-			// }
-			// // for (var i = 0; i < mipLevels * toneLevels; i++)
-			// // {
-			// // 	strokes.Add(new List<Stroke>());
-			// // 	for (var strokeN = 0; strokeN < strokeNum; strokeN ++)
-			// // 	{
-			// // 		strokes[i].Add(GenerateStroke(i / mipLevels));
-			// // 	}
-			// // }
-
-			// Debug.Assert(strokes.Count == mipLevels * toneLevels);
-
-			// for (int tone = 1; tone < toneLevels; tone++) {
-			// 	// // Debug.Log(tone);
-			// 	var toneValue = minTone + tone * (toneRange / (toneLevels - 1));
-
-			// 	for (int mip = mipLevels - 1; mip >= 0; mip--) {
-			// 		// Debug.Log(mip);
-			// 		for (var strokeN = 0; strokeN < strokeNum; strokeN ++)
-			// 		{
-			// 			// ApplyStroke(strokes[(tone * mipLevels) + mip][strokeN], tone, mip, toneValue < 0.5f * (maxTone - minTone));
-			// 			yield return null;
-			// 		}
-			// 	// 	while (CalculateTone(tone, mip) < toneValue) {
-			// 	// 		var stroke = GenerateStroke(toneValue);
-			// 	// 		mipStrokes[mip].Add(GenerateStroke(toneValue));
-            //     //         // ApplyStroke(stroke, tone, mip);
-			// 	// 	}
-			// 	}
-			// }
-		}
-
 		public void DrawStrokes() {
 			var toneRange = maxTone - minTone;
 			var strokes = new Dictionary<(int tone, int mip), List<Stroke>>();
@@ -198,59 +171,29 @@ public class TonalArtMapGenerator {
 			for (int tone = 0; tone < toneLevels; tone++) {
 				// // Debug.Log(tone);
 				var toneValue = minTone + tone * (toneRange / (toneLevels - 1));
+
 				for (int mip = mipLevels - 1; mip >= 0; mip--) {
 
 					var strokeList = new List<Stroke>();
 					strokes[(tone, mip)] = strokeList;
-					Debug.Log((tone * mipLevels) + mip);
 
 					while (CalculateTone(tone, mip) < toneValue) {
 						var stroke = GenerateStroke(toneValue);
 						strokeList.Add(stroke);
-						ApplyStroke(stroke, tone, mip, toneValue < 0.5f * (maxTone - minTone));
+						ApplyStroke(stroke, tone, mip, rotateDark && toneValue < 0.5f * (maxTone - minTone));
 					}
 				}
 			}
-			// for (var i = 0; i < mipLevels * toneLevels; i++)
-			// {
-			// 	strokes.Add(new List<Stroke>());
-			// 	for (var strokeN = 0; strokeN < strokeNum; strokeN ++)
-			// 	{
-			// 		strokes[i].Add(GenerateStroke(i / mipLevels));
-			// 	}
-			// }
 
 			Debug.Assert(strokes.Count == mipLevels * toneLevels);
-
-			// for (int tone = 1; tone < toneLevels; tone++) {
-			// 	// // Debug.Log(tone);
-			// 	var toneValue = minTone + tone * (toneRange / (toneLevels - 1));
-
-			// 	for (int mip = mipLevels - 1; mip >= 0; mip--) {
-			// 		// Debug.Log(mip);
-			// 		// for (var strokeN = 0; strokeN < strokeNum; strokeN ++)
-			// 		// {
-			// 		// 	ApplyStroke(strokes[(tone * mipLevels) + mip][strokeN], tone, mip, toneValue < 0.5f * (maxTone - minTone));
-			// 		// }
-			// 		while (CalculateTone(tone, mip) < toneValue) {
-			// 			var stroke = GenerateStroke(toneValue);
-			// 			ApplyStroke(stroke, tone, mip, toneValue < 0.5f * (maxTone - minTone));
-			// 		}
-			// 	// 	while (CalculateTone(tone, mip) < toneValue) {
-			// 	// 		var stroke = GenerateStroke(toneValue);
-			// 	// 		mipStrokes[mip].Add(GenerateStroke(toneValue));
-            //     //         // ApplyStroke(stroke, tone, mip);
-			// 	// 	}
-			// 	}
-			// }
 		}
 
 		Stroke GenerateStroke(float toneValue) {
 			return new Stroke {
 				Position	= noiseGen.GetSample(),
 				Length		= ShiftDouble(generator.NextDouble(), minLength, maxLength),
-				Horizontal	= rotateStrokes && toneValue < 0.5f * (maxTone - minTone),
-				Rotation		= rotation + ShiftDouble(generator.NextDouble(), -5, 5),
+				Horizontal	= rotateDark && toneValue < 0.5f * (maxTone - minTone),
+				Offset		= rotation + ShiftDouble(generator.NextDouble(), -rotationOffset, rotationOffset),
 			};
 		}
 
@@ -258,136 +201,102 @@ public class TonalArtMapGenerator {
 			return (float)(min + (max - min) * value);
 		}
 
+		float ShiftFloat(float value, float o_min, float o_max, float n_min, float n_max) {
+			float scale = (n_max - n_min) / (o_max - o_min);
+			return n_min + ((value - o_min) * scale);
+		}
+
 		void ApplyStroke(Stroke stroke, int toneLevel, int mipLevel, bool horizontal) {
 			for (int tone = toneLevel; tone < toneLevels; tone++) {
 				for (int mip = mipLevel; mip >= 0; mip--) {
-					DrawStroke(Textures[tone, mip], height, mip, stroke, horizontal);
+					var toneValue = minTone + tone * ((maxTone - minTone) / (toneLevels - 1));
+					DrawStroke(Textures[tone, mip], height * (1 << mip), tone, mip, toneValue, stroke, horizontal);
 				}
 			}
 		}
-
+		
 		float CalculateTone(int tone, int mip) {
-			var oldRt = RenderTexture.active;
-			RenderTexture.active = Textures[tone, mip];
-
 			var mipSize = size >> mip;
 			Debug.Assert(Textures[tone, mip].width == mipSize);
 			Debug.Assert(Textures[tone, mip].height == mipSize);
 			Debug.Assert(toneCalculators[mip].width == mipSize);
 			Debug.Assert(toneCalculators[mip].height == mipSize);
 
-			toneCalculators[mip].ReadPixels(new Rect(0, 0, mipSize, mipSize), 0, 0, true);
+			// toneCalculators[mip].ReadPixels(new Rect(0, 0, mipSize, mipSize), 0, 0, true);
+			
+			var reductions = Math.Log(mipSize, 2);
+			var rtList = new List<RenderTexture>();
+			int smallRes = mipSize/2;
 
-			RenderTexture.active = oldRt;
+			var bigRT = RenderTexture.GetTemporary(MainTextures[tone, mip].width, MainTextures[tone, mip].height, 0, MainTextures[tone, mip].graphicsFormat);
+			rtList.Add(bigRT);
+			Graphics.CopyTexture(MainTextures[tone, mip], bigRT);
 
-			var col = toneCalculators[mip].GetPixels(potSize - mip);
+			Graphics.Blit(MainTextures[tone, mip], bigRT, blendMat);
+			for (int i = 0; i < reductions; i++)
+			{
+				var smallRT = RenderTexture.GetTemporary(smallRes, smallRes, 0, bigRT.format);
+				rtList.Add(smallRT);
+				Graphics.Blit(bigRT,smallRT,reducerMat);
+				bigRT = smallRT;
+				smallRes >>= 1;
+			}
+
+			Debug.Assert(bigRT.width == 1);
+			Debug.Assert(bigRT.height == 1);
+
+			var calculator = new Texture2D(1, 1, TextureFormat.ARGB32, false);
+			calculator.ReadPixels(new Rect(0, 0, 1, 1), 0, 0, false);
+			var col = calculator.GetPixels();
+
+			foreach(var rt in rtList) {
+				RenderTexture.ReleaseTemporary(rt);
+			}
 
 			Debug.Assert(col.Length == 1);
+			// Debug.Log(col[0]);
+			// Debug.Log(ShiftFloat(ColorValue(col[0]), 0, sourceColorValue, 0, 1));
 
-			var val = col[0].r * 0.2126f + col[0].g * 0.7152f + col[0].b * 0.0722f;
-			val = Mathf.Pow(val, 2.2f);
+			return ShiftFloat(ColorValue(col[0]), 0, sourceColorValue, 0, 1);
+		}
+
+		float ColorValue(Color color) {
+			var val = color.r * 0.2126f + color.g * 0.7152f + color.b * 0.0722f;
+
 			return 1 - val;
 		}
 
-		// TODO update to add proper rotation, not just horizontal
-		void DrawStroke(RenderTexture destination, float height, int mip, Stroke stroke, bool horizontal)
-		{
+		void FlushMainTexture(int toneLevel, int mip) {
+			var oldRt = RenderTexture.active;
 
+			var renderTexture = Textures[toneLevel, mip];
+			var mainTexture = MainTextures[toneLevel, mip];
+			RenderTexture.active = renderTexture;
+			mainTexture.ReadPixels(new Rect(0, 0, renderTexture.width, renderTexture.height), 0, 0, false);
+			mainTexture.Apply();
+
+			RenderTexture.active = oldRt;
+		}
+
+		void DrawStroke(RenderTexture destination, float height, int toneLevel, int mip, float toneValue, Stroke stroke, bool horizontal)
+		{
 			if (bltMat == null) {
 				bltMat = new Material(blitShader);
 			}
 
-			bltMat.mainTexture = strokeTex;
-
-			var oldRt = RenderTexture.active;
-			RenderTexture.active = destination;
-            
-            var texWidth = destination.width;
-            var texHeight = destination.height;
-
-			GL.PushMatrix();
-			GL.LoadOrtho();
-			bltMat.SetPass(0);
-			GL.Begin(GL.TRIANGLES);
-
-			var vert = Matrix4x4.Rotate(Quaternion.Euler(new Vector3(0f, 0f, stroke.Rotation))); 
-
-
-			if (!horizontal) {
-				// vert *= Quaternion.Euler(new Vector3(0.0f, 0.0f, 90f));
-				// var vert1 = 
-				vert *=
-					Matrix4x4.Translate(new Vector3(0.5f, 0.5f, 0.0f)) * 
-					Matrix4x4.Rotate(Quaternion.Euler(new Vector3(0.0f, 0.0f, 90 + stroke.Rotation))) * 
-					Matrix4x4.Translate(new Vector3(-0.5f, -0.5f, 0.0f));
-
-				// GL.MultMatrix(vert1);
-			}
-
-			GL.MultMatrix(vert);
 			
-			height *= (1 << mip);
-			var length = stroke.Length * (1 << mip);
-			var x0 = stroke.Position.x;
-			var x1 = stroke.Position.x + stroke.Length;
-			var y0 = stroke.Position.y - (0.5f * height);
-			var y1 = stroke.Position.y + (0.5f * height);
+			float brightnessModifier = ShiftFloat(maxTone - toneValue, minTone, maxTone, 0, maxBrightnessReduction);
 
-			// var vect0 = Quaternion.Euler(0, 0, 1) * new Vector2(x0, y0);
-			// var vect1 = Quaternion.Euler(0, 0, 1) * new Vector2(x1, y1);
+			bltMat.SetTexture("_StrokeTex", strokeTex);
+			bltMat.SetFloat("_StrokeOffsetX", stroke.Position.x);
+			bltMat.SetFloat("_StrokeOffsetY", stroke.Position.y);
+			bltMat.SetFloat("_StrokeScaleX", stroke.Length);
+			bltMat.SetFloat("_StrokeScaleY", height);
+			bltMat.SetFloat("_StrokeRotation", stroke.Offset + (horizontal ? 0 : 90));
+			bltMat.SetFloat("_BrightnessRatio", brightnessModifier);
 
-			// x0 = vect0.x;
-			// y0 = vect0.y;
-			// x1 = vect1.x;
-			// y1 = vect1.y;
-
-
-
-			DrawQuad(x0, y0, x1, y1);
-
-			// x0 -= 1.0f;
-			// x1 -= 1.0f;
-
-			// DrawQuad(x0, y0, x1, y1);
-
-            // if (stroke.Horizontal
-            // && (x0 < 0 || x1 > texWidth)){
-            //     x0 += texWidth;
-            //     x1 += texWidth;
-            //     DrawQuad(x0, y0, x1, y1);
-            //     x0 -= 1.0f;
-            //     x1 -= 1.0f;
-            //     DrawQuad(x0, y0, x1, y1);
-            // }
-
-
-			GL.End();
-			GL.PopMatrix();
-			GL.Flush();
-
-			RenderTexture.active = oldRt;
-
-			bltMat.mainTexture = null;
-		}
-
-		void DrawQuad(float x0, float y0, float x1, float y1) {
-			GL.TexCoord2(0.0f, 0.0f);
-			GL.Vertex3(x0, y0, 0.0f);
-
-			GL.TexCoord2(1.0f, 0.0f);
-			GL.Vertex3(x1, y0, 0.0f);
-
-			GL.TexCoord2(1.0f, 1.0f);
-			GL.Vertex3(x1, y1, 0.0f);
-
-			GL.TexCoord2(0.0f, 0.0f);
-			GL.Vertex3(x0, y0, 0.0f);
-
-			GL.TexCoord2(1.0f, 1.0f);
-			GL.Vertex3(x1, y1, 0.0f);
-
-			GL.TexCoord2(0.0f, 1.0f);
-			GL.Vertex3(x0, y1, 0.0f);
+			Graphics.Blit(MainTextures[toneLevel, mip], Textures[toneLevel, mip], bltMat);
+			FlushMainTexture(toneLevel, mip);
 		}
 	}
 }

@@ -84,7 +84,7 @@ namespace Scripts.Editors
 
         private void GenerateTonalArtMap()
         {
-            var gen = new TonalArtMapGeneratorTransparent(
+            var gen = new TonalArtMapGenerator(
                 texturePOTSize,
                 stroke,
                 sourceColor,
